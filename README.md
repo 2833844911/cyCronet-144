@@ -22,7 +22,36 @@
 1.  **启动后端服务**: 运行项目目录下的 `cronet/cronet-cloak.exe`。
     -   该服务默认监听本地 `3000` 端口。
     -   客户端的所有请求都会转发给这个本地服务处理。
-    -   保存请求debug模式启动命令：`cronet-cloak.exe --debug` 查看请求原始格式是否正常
+
+    **启动命令示例**:
+    ```bash
+    # 基础启动（默认配置）
+    cronet-cloak.exe
+
+    # 调试模式（记录请求到 req.txt 文件）
+    cronet-cloak.exe --debug
+
+    # 详细日志模式
+    cronet-cloak.exe --verbose
+
+    # 组合使用（调试 + 详细日志）
+    cronet-cloak.exe --debug --verbose
+
+    # 自定义端口
+    cronet-cloak.exe --port 8080
+
+    # 自动重启模式
+    cronet-cloak.exe --auto-restart
+    ```
+
+    **配置选项**:
+    | 参数 | 说明 | 默认值 |
+    |------|------|--------|
+    | `-v, --verbose` | 显示详细调试信息 | false |
+    | `-d, --debug` | 记录请求到 req.txt | false |
+    | `-p, --port` | 服务器端口 | 3000 |
+    | `--host` | 监听地址 | 0.0.0.0 |
+    | `-a, --auto-restart` | 自动重启 | false |
 
 2.  **安装依赖**:
     ```bash
