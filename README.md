@@ -133,6 +133,34 @@ with CronetClient(proxy=my_proxy) as client:
 -   **自动保持**: 服务器返回的 `Set-Cookie` 会被自动存储，并在后续对同一域名的请求中自动携带。
 -   **手动设置**: 可以在请求时通过 `cookies` 参数传入额外的 Cookie，它们会与会话 Cookie 合并。
 
+**⚠️ 并发限制说明**:
+-   **单会话单线程**: 一个 `CronetClient` 或 `AsyncCronetClient` 实例在同一时刻只能处理一个请求。
+-   **高并发方案**: 如果需要高并发请求，请创建多个独立的客户端会话实例。
+
+```python
+# ❌ 错误：单会话多线程会导致请求冲突
+with CronetClient() as client:
+    # 这样会有问题
+    threads = [Thread(target=client.get, args=(url,)) for url in urls]
+
+# ✅ 正确：为每个线程创建独立会话
+def worker(url):
+    with CronetClient() as client:
+        return client.get(url)
+
+threads = [Thread(target=worker, args=(url,)) for url in urls]
+
+# ✅ 异步场景：创建多个客户端实例
+async def fetch_concurrent(urls):
+    clients = [AsyncCronetClient() for _ in urls]
+    try:
+        tasks = [client.get(url) for client, url in zip(clients, urls)]
+        return await asyncio.gather(*tasks)
+    finally:
+        for client in clients:
+            await client.close()
+```
+
 ```python
 with CronetClient() as client:
     # 第一次请求，服务器设置 Cookie
