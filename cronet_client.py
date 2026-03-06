@@ -133,6 +133,7 @@ class AsyncCronetClient:
     - Priority 头始终在 headers 最后 (Cookie 之后)
     - Cookie 在倒数第二 (Priority 之前)
     - 用户传递的 cookies 会更新/覆盖会话 cookies
+    - 支持并发控制和请求队列
     """
 
     def __init__(
@@ -140,16 +141,22 @@ class AsyncCronetClient:
         base_url: str =BASE_URL,
         proxy: Optional[Proxy] = None,
         timeout: float = 30.0,
-        skip_cert_verify: bool = True
+        skip_cert_verify: bool = True,
+        max_concurrent: int = 1  # 最大并发请求数
     ):
         self.base_url = base_url
         self.proxy = proxy
         self.timeout = timeout
         self.skip_cert_verify = skip_cert_verify
+        self.max_concurrent = max_concurrent
         self.session_id: Optional[str] = None
         self._http_session: Optional[aiohttp.ClientSession] = None
         # 会话级 cookies 存储: {domain: {cookie_name: cookie_value}}
         self._cookies: Dict[str, Dict[str, str]] = {}
+        # 并发控制
+        self._semaphore: Optional[asyncio.Semaphore] = None
+        self._active_requests = 0
+        self._is_closed = False
 
     @property
     def cookies(self) -> Dict[str, Dict[str, str]]:
@@ -162,6 +169,7 @@ class AsyncCronetClient:
 
     async def __aenter__(self):
         await self._create_session()
+        self._semaphore = asyncio.Semaphore(self.max_concurrent)
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -200,6 +208,19 @@ class AsyncCronetClient:
 
     async def close(self):
         """关闭会话"""
+        self._is_closed = True
+
+        # 等待所有活跃请求完成
+        if self._active_requests > 0:
+            print(f"[INFO] Waiting for {self._active_requests} active requests to complete...")
+            for _ in range(100):  # 最多等待 10 秒
+                if self._active_requests == 0:
+                    break
+                await asyncio.sleep(0.1)
+
+            if self._active_requests > 0:
+                print(f"[WARN] Timeout waiting for {self._active_requests} active requests")
+
         if self.session_id:
             try:
                 http_session = await self._get_http_session()
@@ -319,6 +340,41 @@ class AsyncCronetClient:
         if not self.session_id:
             raise RequestError("会话未创建，请使用 async with 或调用 _create_session()")
 
+        if self._is_closed:
+            raise RequestError("会话已关闭")
+
+        # 使用信号量控制并发
+        if self._semaphore is None:
+            self._semaphore = asyncio.Semaphore(self.max_concurrent)
+
+        async with self._semaphore:
+            self._active_requests += 1
+            try:
+                return await self._do_request(
+                    method, url,
+                    headers=headers,
+                    cookies=cookies,
+                    content=content,
+                    data=data,
+                    json_data=json_data,
+                    timeout=timeout
+                )
+            finally:
+                self._active_requests -= 1
+
+    async def _do_request(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: Optional[HeadersType] = None,
+        cookies: Optional[CookiesType] = None,
+        content: ContentType = None,
+        data: Union[str, Dict[str, Any], None] = None,
+        json_data: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None
+    ) -> Response:
+        """实际执行请求的内部方法"""
         # 提取域名
         domain = _extract_domain(url)
 
@@ -360,6 +416,11 @@ class AsyncCronetClient:
 
         # 构建 payload
         request_timeout = timeout if timeout is not None else self.timeout
+
+        # Ensure minimum timeout of 0.1 seconds (100ms)
+        if request_timeout < 0.1:
+            request_timeout = 0.1
+
         payload = {
             "url": url,
             "method": method.upper(),
@@ -372,11 +433,13 @@ class AsyncCronetClient:
             payload["body"] = body_hex
 
         try:
+            # Python HTTP timeout = Cronet timeout + 5 seconds buffer
+            http_timeout = request_timeout + 5.0
             http_session = await self._get_http_session()
             async with http_session.post(
                 f"{self.base_url}/session/{self.session_id}/request",
                 json=payload,
-                timeout=aiohttp.ClientTimeout(total=request_timeout + 10)
+                timeout=aiohttp.ClientTimeout(total=http_timeout)
             ) as resp:
                 data = await resp.json()
 
