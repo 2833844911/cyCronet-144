@@ -300,10 +300,21 @@ class AsyncCronetClient:
         cookies: Optional[CookiesType] = None,
         content: ContentType = None,
         data: Union[str, Dict[str, Any], None] = None,
-        json_data: Optional[Dict[str, Any]] = None
+        json_data: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None
     ) -> Response:
         """
         发送 HTTP 请求
+
+        Args:
+            method: HTTP 方法 (GET, POST, etc.)
+            url: 请求 URL
+            headers: 请求头
+            cookies: Cookies
+            content: 请求体内容
+            data: 表单数据或字符串
+            json_data: JSON 数据
+            timeout: 请求超时时间（秒），None 使用客户端默认值
         """
         if not self.session_id:
             raise RequestError("会话未创建，请使用 async with 或调用 _create_session()")
@@ -348,10 +359,12 @@ class AsyncCronetClient:
                     headers.append(("content-type", "application/x-www-form-urlencoded"))
 
         # 构建 payload
+        request_timeout = timeout if timeout is not None else self.timeout
         payload = {
             "url": url,
             "method": method.upper(),
-            "headers": self._prepare_headers(headers, cookies, domain)
+            "headers": self._prepare_headers(headers, cookies, domain),
+            "timeout_ms": int(request_timeout * 1000)
         }
 
         body_hex = self._prepare_content(content)
@@ -363,7 +376,7 @@ class AsyncCronetClient:
             async with http_session.post(
                 f"{self.base_url}/session/{self.session_id}/request",
                 json=payload,
-                timeout=aiohttp.ClientTimeout(total=self.timeout + 10)
+                timeout=aiohttp.ClientTimeout(total=request_timeout + 10)
             ) as resp:
                 data = await resp.json()
 
@@ -408,10 +421,11 @@ class AsyncCronetClient:
         url: str,
         *,
         headers: Optional[HeadersType] = None,
-        cookies: Optional[CookiesType] = None
+        cookies: Optional[CookiesType] = None,
+        timeout: Optional[float] = None
     ) -> Response:
         """发送 GET 请求"""
-        return await self.request("GET", url, headers=headers, cookies=cookies)
+        return await self.request("GET", url, headers=headers, cookies=cookies, timeout=timeout)
 
     async def post(
         self,
@@ -421,10 +435,11 @@ class AsyncCronetClient:
         cookies: Optional[CookiesType] = None,
         content: ContentType = None,
         data: Union[str, Dict[str, Any], None] = None,
-        json: Optional[Dict[str, Any]] = None
+        json: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None
     ) -> Response:
         """发送 POST 请求"""
-        return await self.request("POST", url, headers=headers, cookies=cookies, content=content, data=data, json_data=json)
+        return await self.request("POST", url, headers=headers, cookies=cookies, content=content, data=data, json_data=json, timeout=timeout)
 
     async def put(
         self,
@@ -434,20 +449,22 @@ class AsyncCronetClient:
         cookies: Optional[CookiesType] = None,
         content: ContentType = None,
         data: Union[str, Dict[str, Any], None] = None,
-        json: Optional[Dict[str, Any]] = None
+        json: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None
     ) -> Response:
         """发送 PUT 请求"""
-        return await self.request("PUT", url, headers=headers, cookies=cookies, content=content, data=data, json_data=json)
+        return await self.request("PUT", url, headers=headers, cookies=cookies, content=content, data=data, json_data=json, timeout=timeout)
 
     async def delete(
         self,
         url: str,
         *,
         headers: Optional[HeadersType] = None,
-        cookies: Optional[CookiesType] = None
+        cookies: Optional[CookiesType] = None,
+        timeout: Optional[float] = None
     ) -> Response:
         """发送 DELETE 请求"""
-        return await self.request("DELETE", url, headers=headers, cookies=cookies)
+        return await self.request("DELETE", url, headers=headers, cookies=cookies, timeout=timeout)
 
     async def patch(
         self,
@@ -457,10 +474,11 @@ class AsyncCronetClient:
         cookies: Optional[CookiesType] = None,
         content: ContentType = None,
         data: Union[str, Dict[str, Any], None] = None,
-        json: Optional[Dict[str, Any]] = None
+        json: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None
     ) -> Response:
         """发送 PATCH 请求"""
-        return await self.request("PATCH", url, headers=headers, cookies=cookies, content=content, data=data, json_data=json)
+        return await self.request("PATCH", url, headers=headers, cookies=cookies, content=content, data=data, json_data=json, timeout=timeout)
 
 
 class CronetClient:
@@ -629,9 +647,22 @@ class CronetClient:
         cookies: Optional[CookiesType] = None,
         content: ContentType = None,
         data: Union[str, Dict[str, Any], None] = None,
-        json_data: Optional[Dict[str, Any]] = None
+        json_data: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None
     ) -> Response:
-        """发送 HTTP 请求"""
+        """
+        发送 HTTP 请求
+
+        Args:
+            method: HTTP 方法 (GET, POST, etc.)
+            url: 请求 URL
+            headers: 请求头
+            cookies: Cookies
+            content: 请求体内容
+            data: 表单数据或字符串
+            json_data: JSON 数据
+            timeout: 请求超时时间（秒），None 使用客户端默认值
+        """
         if not self.session_id:
             raise RequestError("会话未创建，请使用 with 语句或调用 _create_session()")
 
@@ -675,10 +706,17 @@ class CronetClient:
                     headers.append(("content-type", "application/x-www-form-urlencoded"))
 
         # 构建 payload
+        request_timeout = timeout if timeout is not None else self.timeout
+
+        # Ensure minimum timeout of 0.1 seconds (100ms)
+        if request_timeout < 0.1:
+            request_timeout = 0.1
+
         payload = {
             "url": url,
             "method": method.upper(),
-            "headers": self._prepare_headers(headers, cookies, domain)
+            "headers": self._prepare_headers(headers, cookies, domain),
+            "timeout_ms": int(request_timeout * 1000)
         }
 
         body_hex = self._prepare_content(content)
@@ -686,10 +724,12 @@ class CronetClient:
             payload["body"] = body_hex
 
         try:
+            # Python HTTP timeout = Cronet timeout + 5 seconds buffer
+            http_timeout = request_timeout + 5.0
             resp = self._requests.post(
                 f"{self.base_url}/session/{self.session_id}/request",
                 json=payload,
-                timeout=self.timeout + 10
+                timeout=http_timeout
             )
             data = resp.json()
 
@@ -734,10 +774,11 @@ class CronetClient:
         url: str,
         *,
         headers: Optional[HeadersType] = None,
-        cookies: Optional[CookiesType] = None
+        cookies: Optional[CookiesType] = None,
+        timeout: Optional[float] = None
     ) -> Response:
         """发送 GET 请求"""
-        return self.request("GET", url, headers=headers, cookies=cookies)
+        return self.request("GET", url, headers=headers, cookies=cookies, timeout=timeout)
 
     def post(
         self,
@@ -747,10 +788,11 @@ class CronetClient:
         cookies: Optional[CookiesType] = None,
         content: ContentType = None,
         data: Union[str, Dict[str, Any], None] = None,
-        json: Optional[Dict[str, Any]] = None
+        json: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None
     ) -> Response:
         """发送 POST 请求"""
-        return self.request("POST", url, headers=headers, cookies=cookies, content=content, data=data, json_data=json)
+        return self.request("POST", url, headers=headers, cookies=cookies, content=content, data=data, json_data=json, timeout=timeout)
 
     def put(
         self,
@@ -760,20 +802,22 @@ class CronetClient:
         cookies: Optional[CookiesType] = None,
         content: ContentType = None,
         data: Union[str, Dict[str, Any], None] = None,
-        json: Optional[Dict[str, Any]] = None
+        json: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None
     ) -> Response:
         """发送 PUT 请求"""
-        return self.request("PUT", url, headers=headers, cookies=cookies, content=content, data=data, json_data=json)
+        return self.request("PUT", url, headers=headers, cookies=cookies, content=content, data=data, json_data=json, timeout=timeout)
 
     def delete(
         self,
         url: str,
         *,
         headers: Optional[HeadersType] = None,
-        cookies: Optional[CookiesType] = None
+        cookies: Optional[CookiesType] = None,
+        timeout: Optional[float] = None
     ) -> Response:
         """发送 DELETE 请求"""
-        return self.request("DELETE", url, headers=headers, cookies=cookies)
+        return self.request("DELETE", url, headers=headers, cookies=cookies, timeout=timeout)
 
     def patch(
         self,
@@ -783,7 +827,8 @@ class CronetClient:
         cookies: Optional[CookiesType] = None,
         content: ContentType = None,
         data: Union[str, Dict[str, Any], None] = None,
-        json: Optional[Dict[str, Any]] = None
+        json: Optional[Dict[str, Any]] = None,
+        timeout: Optional[float] = None
     ) -> Response:
         """发送 PATCH 请求"""
-        return self.request("PATCH", url, headers=headers, cookies=cookies, content=content, data=data, json_data=json)
+        return self.request("PATCH", url, headers=headers, cookies=cookies, content=content, data=data, json_data=json, timeout=timeout)
