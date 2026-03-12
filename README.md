@@ -2,6 +2,10 @@
 
 [English](README_EN.md) | 简体中文
 
+## cycronet交流群
+- 加作者微信 Chankipen 说明来意
+
+
 ## 🎯 核心功能
 
 浏览器请求协议指纹检测的尽头，当前库已经没有任何检测点，支持高并发，项目语法类似requests使用方便，Cycronet 是基于 Chromium Cronet 网络栈的 Python HTTP 客户端，**最大的特点是能够产生真实的 Chrome 浏览器 TLS/HTTP2 指纹**，从而绕过各种反爬虫和指纹检测系统。
