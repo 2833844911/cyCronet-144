@@ -2,6 +2,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
 use std::sync::Arc;
 use std::time::Duration;
+use pyo3_asyncio::tokio::future_into_py;
 
 use crate::cronet::{SessionConfig, SessionManager};
 use crate::cronet_pb::{Header, TargetRequest};
@@ -10,14 +11,24 @@ use crate::cronet_pb::{Header, TargetRequest};
 #[pyclass]
 pub struct PyCronetClient {
     manager: Arc<SessionManager>,
+    runtime: Arc<tokio::runtime::Runtime>,
 }
 
 #[pymethods]
 impl PyCronetClient {
     #[new]
     fn new() -> PyResult<Self> {
+        // Create a multi-threaded Tokio runtime for async operations
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                format!("Failed to create Tokio runtime: {}", e)
+            ))?;
+
         Ok(PyCronetClient {
             manager: Arc::new(SessionManager::new()),
+            runtime: Arc::new(runtime),
         })
     }
 
@@ -57,7 +68,97 @@ impl PyCronetClient {
         Ok(session_id)
     }
 
-    /// Execute request using a session
+    /// Execute request using a session (true async with pyo3-asyncio)
+    ///
+    /// Args:
+    ///     session_id: Session ID
+    ///     url: Target URL
+    ///     method: HTTP method (GET, POST, etc.)
+    ///     headers: List of tuples [("name", "value"), ...]
+    ///     body: Request body as bytes
+    ///     allow_redirects: Whether to follow redirects (default: True)
+    ///
+    /// Returns:
+    ///     Awaitable that resolves to Dict with keys: status_code, headers, body
+    #[pyo3(signature = (session_id, url, method, headers=None, body=None, allow_redirects=true))]
+    fn request<'py>(
+        &self,
+        py: Python<'py>,
+        session_id: String,
+        url: String,
+        method: String,
+        headers: Option<Vec<(String, String)>>,
+        body: Option<Vec<u8>>,
+        allow_redirects: bool,
+    ) -> PyResult<&'py PyAny> {
+        let headers_vec = headers.unwrap_or_default();
+        let body_vec = body.unwrap_or_default();
+
+        // Build target request
+        let target = TargetRequest {
+            url,
+            method,
+            headers: headers_vec
+                .into_iter()
+                .map(|(name, value)| Header { name, value })
+                .collect(),
+            body: body_vec,
+        };
+
+        // Clone Arc for async task
+        let manager = self.manager.clone();
+
+        // Convert Rust async to Python awaitable (TRUE ASYNC!)
+        future_into_py(py, async move {
+            // Send request
+            let (request, rx, timeout_ms) = manager
+                .send_request(&session_id, &target, allow_redirects)
+                .ok_or_else(|| {
+                    PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                        "Failed to send request (session not found or concurrent limit reached)"
+                    )
+                })?;
+
+            // Wait for response with timeout (TRUE ASYNC - no blocking!)
+            let timeout_duration = Duration::from_millis(timeout_ms);
+            let result = tokio::time::timeout(timeout_duration, rx).await;
+
+            // Drop request handle
+            drop(request);
+
+            // Convert result to Python dict
+            match result {
+                Ok(Ok(Ok(response))) => {
+                    Python::with_gil(|py| {
+                        let dict = PyDict::new(py);
+                        dict.set_item("status_code", response.status_code)?;
+                        dict.set_item("body", PyBytes::new(py, &response.body))?;
+
+                        // Convert headers
+                        let headers_list = PyList::empty(py);
+                        for (name, value) in response.headers {
+                            let tuple = (name, value);
+                            headers_list.append(tuple)?;
+                        }
+                        dict.set_item("headers", headers_list)?;
+
+                        Ok::<PyObject, PyErr>(dict.into())
+                    })
+                }
+                Ok(Ok(Err(e))) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                    format!("Request failed: {}", e)
+                )),
+                Ok(Err(_)) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                    "Channel closed unexpectedly"
+                )),
+                Err(_) => Err(PyErr::new::<pyo3::exceptions::PyTimeoutError, _>(
+                    format!("Request timeout after {}ms", timeout_ms)
+                )),
+            }
+        })
+    }
+
+    /// Execute request using a session (blocking/sync version)
     ///
     /// Args:
     ///     session_id: Session ID
@@ -70,7 +171,7 @@ impl PyCronetClient {
     /// Returns:
     ///     Dict with keys: status_code, headers, body
     #[pyo3(signature = (session_id, url, method, headers=None, body=None, allow_redirects=true))]
-    fn request(
+    fn request_sync(
         &self,
         py: Python,
         session_id: String,
@@ -99,68 +200,43 @@ impl PyCronetClient {
 
         match result {
             Some((request, rx, timeout_ms)) => {
-                // Wait for response with timeout
                 let timeout_duration = Duration::from_millis(timeout_ms);
 
-                // Release GIL while waiting for response to allow concurrent requests
-                let response_result = py.allow_threads(move || {
-                    // Use a thread to implement timeout
-                    let (timeout_tx, timeout_rx) = std::sync::mpsc::channel();
-                    std::thread::spawn(move || {
-                        match rx.blocking_recv() {
-                            Ok(result) => {
-                                let _ = timeout_tx.send(Some(result));
-                            }
-                            Err(_) => {
-                                let _ = timeout_tx.send(None);
-                            }
-                        }
-                    });
-
-                    // Wait with timeout and keep request alive
-                    let result = timeout_rx.recv_timeout(timeout_duration);
-                    // Explicitly drop request here to ensure cleanup on timeout
-                    drop(request);
-                    result
+                // Release GIL and block on async operation
+                let response_result = py.allow_threads(|| {
+                    self.runtime.block_on(async {
+                        tokio::time::timeout(timeout_duration, rx).await
+                    })
                 });
 
+                // Drop request handle
+                drop(request);
+
                 match response_result {
-                    Ok(Some(Ok(response))) => {
-                        let dict = PyDict::new_bound(py);
+                    Ok(Ok(Ok(response))) => {
+                        let dict = PyDict::new(py);
                         dict.set_item("status_code", response.status_code)?;
-                        dict.set_item("body", PyBytes::new_bound(py, &response.body))?;
+                        dict.set_item("body", PyBytes::new(py, &response.body))?;
 
                         // Convert headers
-                        let headers_list = PyList::empty_bound(py);
+                        let headers_list = PyList::empty(py);
                         for (name, value) in response.headers {
                             let tuple = (name, value);
                             headers_list.append(tuple)?;
                         }
                         dict.set_item("headers", headers_list)?;
 
-                        Ok(dict.into_py(py))
+                        Ok(dict.into())
                     }
-                    Ok(Some(Err(e))) => {
-                        Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                            format!("Request failed: {}", e)
-                        ))
-                    }
-                    Ok(None) => {
-                        Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                            "Channel closed unexpectedly"
-                        ))
-                    }
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                        // Request was already dropped in the closure above
-                        Err(PyErr::new::<pyo3::exceptions::PyTimeoutError, _>(
-                            format!("Request timeout after {}ms", timeout_ms)
-                        ))
-                    }
-                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                        Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                            "Timeout channel disconnected"
-                        ))
-                    }
+                    Ok(Ok(Err(e))) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                        format!("Request failed: {}", e)
+                    )),
+                    Ok(Err(_)) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                        "Channel closed unexpectedly"
+                    )),
+                    Err(_) => Err(PyErr::new::<pyo3::exceptions::PyTimeoutError, _>(
+                        format!("Request timeout after {}ms", timeout_ms)
+                    )),
                 }
             }
             None => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
@@ -182,7 +258,7 @@ impl PyCronetClient {
 
 /// Python module
 #[pymodule]
-fn cronet_cloak(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn cronet_cloak(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<PyCronetClient>()?;
     Ok(())
 }

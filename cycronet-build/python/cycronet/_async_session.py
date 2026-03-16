@@ -283,22 +283,14 @@ class AsyncSession:
             need_content_type=need_content_type
         )
 
-        # Use run_in_executor to execute sync request in thread pool
-        # Avoid pyo3-asyncio compatibility issues
-        import asyncio
-        loop = asyncio.get_event_loop()
-
-        # Always disable redirects at Rust layer, handle in Python
-        response_dict = await loop.run_in_executor(
-            None,
-            lambda: self._client._client.request(
-                self._session_id,
-                url,
-                method.upper(),
-                prepared_headers,
-                body,
-                False  # Always False - handle redirects in Python
-            )
+        # Directly await Rust async function (true async, no thread pool)
+        response_dict = await self._client._client.request(
+            self._session_id,
+            url,
+            method.upper(),
+            prepared_headers,
+            body,
+            False  # Always False - handle redirects in Python
         )
 
         status_code = response_dict['status_code']

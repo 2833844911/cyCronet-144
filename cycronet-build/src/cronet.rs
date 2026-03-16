@@ -467,8 +467,15 @@ struct ExecutorContext {
 // -----------------------------------------------------------------------------
 
 unsafe extern "C" fn executor_execute(_self: Cronet_ExecutorPtr, command: Cronet_RunnablePtr) {
-    // 同步执行，避免线程调度导致的竞态条件
-    // 这会牺牲一些性能，但能保证线程安全
+    // Cronet callbacks must be executed synchronously because:
+    // 1. Cronet_Runnable pointers are not Send (cannot cross thread boundaries)
+    // 2. Cronet expects immediate execution for proper state management
+    //
+    // The async improvement comes from:
+    // - Using Tokio channels (oneshot) for result delivery
+    // - Non-blocking wait in Python layer via async/await
+    // - Tokio runtime managing concurrent requests efficiently
+
     Cronet_Runnable_Run(command);
     Cronet_Runnable_Destroy(command);
 }

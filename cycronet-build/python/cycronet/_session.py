@@ -287,7 +287,8 @@ class Session:
         )
 
         # Always disable redirects at Rust layer, handle in Python
-        response_dict = self._client._client.request(
+        # Use request_sync for synchronous blocking call
+        response_dict = self._client._client.request_sync(
             self._session_id,
             url,
             method.upper(),
