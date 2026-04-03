@@ -565,9 +565,10 @@ import cycronet
 session = cycronet.CronetClient(verify=False)
 
 # 为不同域名设置不同的 Cookie
-session.cookies.set_cookie('api_key', 'key123', domain='api.example.com')
-session.cookies.set_cookie('user_token', 'token456', domain='www.example.com')
-session.cookies.set_cookie('session', 'session789', domain='example.com', path='/admin')
+session.cookies.update({'session_id': 'abc123'}, domain='www.baidu.com')
+session.cookies.update({'user_token': 'xyz789'}, domain='tsvmp.com')
+session.cookies.update({'preferences': 'dark_mode=1'}, domain='example.com')
+
 
 # 访问不同域名时会自动使用对应的 Cookie
 response1 = session.get('https://api.example.com/data')      # 携带 api_key
