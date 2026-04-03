@@ -589,7 +589,8 @@ session = cycronet.CronetClient(verify=False)
 response = session.get('https://example.com/login')
 
 # 从响应中获取 Cookie 并更新
-session.cookies.set_cookie('auth_token', 'new_token_from_response', domain='example.com')
+session.cookies.update({'preferences': 'dark_mode=1'}, domain='example.com')
+
 
 # 后续请求会携带更新后的 Cookie
 response = session.get('https://example.com/dashboard')
@@ -605,8 +606,8 @@ import cycronet
 session = cycronet.CronetClient(verify=False)
 
 # 设置 Cookie
-session.cookies.set_cookie('key1', 'value1', domain='example.com')
-session.cookies.set_cookie('key2', 'value2', domain='example.com')
+session.cookies.update({'session_id': 'abc123'}, domain='example.com')
+session.cookies.update({'user_token': 'xyz789'}, domain='example.com')
 
 # 查看所有 Cookie
 print(session.cookies.get_dict())  # 获取所有 Cookie 的字典
@@ -631,8 +632,7 @@ import cycronet
 async def main():
     async with cycronet.AsyncCronetClient(verify=False) as session:
         # 初始化 Cookie
-        session.cookies.set_cookie('session_id', 'async_session_123', domain='example.com')
-        session.cookies.set_cookie('user_token', 'token_xyz', domain='example.com')
+        session.cookies.update({'session_id': 'abc123'}, domain=example.com')
 
         # 发送请求
         response = await session.get('https://example.com')
