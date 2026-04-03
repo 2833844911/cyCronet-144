@@ -540,9 +540,9 @@ session = cycronet.CronetClient(
 )
 
 # 方法 1: 使用 set_cookie 设置 Cookie（推荐）
-session.cookies.set_cookie('session_id', 'abc123', domain='example.com')
-session.cookies.set_cookie('user_token', 'xyz789', domain='example.com')
-session.cookies.set_cookie('preferences', 'dark_mode=1', domain='example.com')
+session.cookies.update({'session_id': 'abc123'}, domain='www.baidu.com')
+session.cookies.update({'user_token': 'xyz789'}, domain='tsvmp.com')
+session.cookies.update({'preferences': 'dark_mode=1'}, domain='example.com')
 
 # 方法 2: 使用 update 批量设置（不指定域名）
 session.cookies.update({
